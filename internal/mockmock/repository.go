@@ -48,6 +48,9 @@ func (r *Postgres) FindAll(ctx context.Context) ([]*Mockmock, error) {
 		}
 		result = append(result, m)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 

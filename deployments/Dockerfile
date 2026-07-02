@@ -18,7 +18,7 @@ FROM alpine:3.20
 
 WORKDIR /app
 
-# migrations are read at startup from ./db/migrations; the web UI is embedded
+# migrations are read at startup from ./db/migrations
 COPY --from=build /out/server /app/server
 COPY --from=build /src/db/migrations /app/db/migrations
 

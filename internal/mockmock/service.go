@@ -91,6 +91,10 @@ func (s *Service) Create(ctx context.Context, in Input) (*Mockmock, error) {
 	}
 	m := newMockmock(method, path, status, response)
 	if err := s.repo.Create(ctx, m); err != nil {
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
+			return nil, apperr.Conflict("MOCKMOCK_CONFLICT",
+				fmt.Sprintf("a mockmock for %s %s already exists", m.Method, m.Path))
+		}
 		return nil, apperr.Internal(err)
 	}
 	return m, nil
@@ -101,15 +105,38 @@ func (s *Service) Update(ctx context.Context, id string, in Input) (*Mockmock, e
 	if err != nil {
 		return nil, apperr.NotFound("MOCKMOCK_NOT_FOUND", "mockmock not found")
 	}
-	m.Method = strings.ToUpper(strings.TrimSpace(in.Method))
-	m.Path = normalizePath(in.Path)
+
+	method := strings.ToUpper(strings.TrimSpace(in.Method))
+	if method != "" {
+		m.Method = method
+	}
+
+	if strings.TrimSpace(in.Path) != "" {
+		path := normalizePath(in.Path)
+		if path == "/" {
+			return nil, apperr.Validation("path is required")
+		}
+		m.Path = path
+	}
+
 	if in.Status != 0 {
 		m.Status = in.Status
 	}
 	if len(in.Response) > 0 {
 		m.Response = in.Response
 	}
+
+	// Check if updating method/path conflicts with another existing mockmock
+	if existing, _ := s.repo.FindMatch(ctx, m.Method, m.Path); existing != nil && existing.ID != m.ID {
+		return nil, apperr.Conflict("MOCKMOCK_CONFLICT",
+			fmt.Sprintf("a mockmock for %s %s already exists", m.Method, m.Path))
+	}
+
 	if err := s.repo.Update(ctx, m); err != nil {
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
+			return nil, apperr.Conflict("MOCKMOCK_CONFLICT",
+				fmt.Sprintf("a mockmock for %s %s already exists", m.Method, m.Path))
+		}
 		return nil, apperr.Internal(err)
 	}
 	return m, nil

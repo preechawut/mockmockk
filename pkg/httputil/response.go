@@ -1,92 +1,32 @@
-// Package httputil provides reusable HTTP response helpers with a consistent
-// JSON envelope and typed-error mapping.
 package httputil
 
 import (
 	"errors"
 	"log"
 	"net/http"
-	"time"
 
 	"mockapi/pkg/apperr"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 )
 
-const requestIDKey = "requestId"
-
-func RequestID() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		id := c.GetHeader("X-Request-Id")
-		if id == "" {
-			id = uuid.NewString()
-		}
-		c.Set(requestIDKey, id)
-		c.Header("X-Request-Id", id)
-		c.Next()
-	}
-}
-
-func requestID(c *gin.Context) string {
-	if id := c.GetString(requestIDKey); id != "" {
-		return id
-	}
-	return uuid.NewString()
-}
-
-func CORS() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, X-Request-Id")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
-
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(http.StatusNoContent)
-			return
-		}
-
-		c.Next()
-	}
-}
-
-type meta struct {
-	RequestID string    `json:"requestId"`
-	Timestamp time.Time `json:"timestamp"`
-}
-
-type successResponse struct {
-	Data any  `json:"data"`
-	Meta meta `json:"meta"`
-}
-
-type errorDetail struct {
+type errorResponse struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
 
-type errorResponse struct {
-	Error errorDetail `json:"error"`
-	Meta  meta        `json:"meta"`
-}
-
-func newMeta(c *gin.Context) meta {
-	return meta{RequestID: requestID(c), Timestamp: time.Now().UTC()}
-}
-
 func RespondOK(c *gin.Context, data any) {
-	c.JSON(http.StatusOK, successResponse{Data: data, Meta: newMeta(c)})
+	c.JSON(http.StatusOK, data)
 }
 
 func RespondCreated(c *gin.Context, data any) {
-	c.JSON(http.StatusCreated, successResponse{Data: data, Meta: newMeta(c)})
+	c.JSON(http.StatusCreated, data)
 }
 
 func RespondAPIError(c *gin.Context, status int, code, message string) {
 	c.JSON(status, errorResponse{
-		Error: errorDetail{Code: code, Message: message},
-		Meta:  newMeta(c),
+		Code:    code,
+		Message: message,
 	})
 }
 
@@ -104,5 +44,5 @@ func RespondErr(c *gin.Context, err error) {
 }
 
 func logErr(c *gin.Context, err error) {
-	log.Printf("[%s] %s %s: %v", requestID(c), c.Request.Method, c.Request.URL.Path, err)
+	log.Printf("%s %s: %v", c.Request.Method, c.Request.URL.Path, err)
 }
