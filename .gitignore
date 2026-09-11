@@ -26,5 +26,8 @@ coverage.html
 .agent/
 .agents/
 .claude/
-docs/
 skills-lock.json
+
+
+web/
+docs/

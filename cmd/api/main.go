@@ -1,67 +1,29 @@
 package main
 
 import (
-	"context"
-	"log"
-	"net/http"
+	"log/slog"
 	"os"
-	"os/signal"
-	"syscall"
-	"time"
 
+	"mockapi/internal/app"
 	"mockapi/internal/config"
-	"mockapi/internal/database"
-	"mockapi/internal/mockmock"
-	"mockapi/internal/server"
+	"mockapi/internal/platform/logger"
 )
 
 func main() {
+	bootstrap := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("load config: %v", err)
+		bootstrap.Error("invalid configuration", "error", err)
+		os.Exit(1)
 	}
-
-	if err := database.RunMigrations(cfg.DBURL); err != nil {
-		log.Fatalf("run migrations: %v", err)
-	}
-
-	pool, err := database.Connect(cfg.DBURL)
+	appLogger, err := logger.New(os.Stdout, cfg.LogLevel, cfg.LogFormat)
 	if err != nil {
-		log.Fatalf("connect db: %v", err)
+		bootstrap.Error("invalid logging configuration", "error", err)
+		os.Exit(1)
 	}
-	defer pool.Close()
-
-	repo := mockmock.NewPostgres(pool)
-	svc := mockmock.NewService(repo)
-	handler := mockmock.NewHandler(svc)
-	router := server.NewRouter(handler, pool)
-
-	srv := &http.Server{
-		Addr:    ":" + cfg.Port,
-		Handler: router,
+	appLogger = appLogger.With("service", cfg.ServiceName, "environment", cfg.Environment)
+	if err := app.Run(cfg, appLogger); err != nil {
+		appLogger.Error("server stopped", "error", err)
+		os.Exit(1)
 	}
-
-	// Start server in a goroutine
-	go func() {
-		log.Printf("server listening on :%s", cfg.Port)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("server error: %v", err)
-		}
-	}()
-
-	// Wait for interrupt signal
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
-	log.Println("shutting down server...")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatalf("server forced to shutdown: %v", err)
-	}
-
-	log.Println("server exited gracefully")
 }
