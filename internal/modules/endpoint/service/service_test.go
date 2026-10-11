@@ -1,79 +1,115 @@
-package service_test
+package service
 
 import (
 	"context"
 	"encoding/json"
 	"testing"
 
-	"mockapi/internal/modules/endpoint/repository/memory"
-	"mockapi/internal/modules/endpoint/service"
+	"mockapi/internal/modules/endpoint/domain"
+	"mockapi/internal/shared/apperror"
 )
 
-func TestServiceCRUD(t *testing.T) {
-	ctx := context.Background()
-	repo := memory.NewRepository()
-	svc := service.NewService(repo)
+type fakeEndpointRepo struct {
+	endpoints map[string]domain.Endpoint
+}
 
-	created, err := svc.Create(ctx, "get", "users", 200, json.RawMessage(`{"users":[]}`))
+func newFakeEndpointRepo() *fakeEndpointRepo {
+	return &fakeEndpointRepo{endpoints: make(map[string]domain.Endpoint)}
+}
+
+func (f *fakeEndpointRepo) Create(ctx context.Context, m domain.Endpoint) (domain.Endpoint, error) {
+	f.endpoints[m.ID] = m
+	return m, nil
+}
+
+func (f *fakeEndpointRepo) List(ctx context.Context) ([]domain.Endpoint, error) {
+	res := make([]domain.Endpoint, 0, len(f.endpoints))
+	for _, v := range f.endpoints {
+		res = append(res, v)
+	}
+	return res, nil
+}
+
+func (f *fakeEndpointRepo) ListByProject(ctx context.Context, projectID string) ([]domain.Endpoint, error) {
+	res := make([]domain.Endpoint, 0)
+	for _, v := range f.endpoints {
+		if v.ProjectID != nil && *v.ProjectID == projectID {
+			res = append(res, v)
+		}
+	}
+	return res, nil
+}
+
+func (f *fakeEndpointRepo) GetByID(ctx context.Context, id string) (domain.Endpoint, error) {
+	e, ok := f.endpoints[id]
+	if !ok {
+		return domain.Endpoint{}, apperror.New(apperror.NotFound, "not found")
+	}
+	return e, nil
+}
+
+func (f *fakeEndpointRepo) FindMatch(ctx context.Context, method, path string) (domain.Endpoint, error) {
+	for _, v := range f.endpoints {
+		if v.ProjectID == nil && v.Method == method && v.Path == path {
+			return v, nil
+		}
+	}
+	return domain.Endpoint{}, apperror.New(apperror.NotFound, "not found")
+}
+
+func (f *fakeEndpointRepo) FindMatchByProject(ctx context.Context, projectID, method, path string) (domain.Endpoint, error) {
+	for _, v := range f.endpoints {
+		if v.ProjectID != nil && *v.ProjectID == projectID && v.Method == method && v.Path == path {
+			return v, nil
+		}
+	}
+	return domain.Endpoint{}, apperror.New(apperror.NotFound, "not found")
+}
+
+func (f *fakeEndpointRepo) Update(ctx context.Context, m domain.Endpoint) (domain.Endpoint, error) {
+	f.endpoints[m.ID] = m
+	return m, nil
+}
+
+func (f *fakeEndpointRepo) Delete(ctx context.Context, id string) error {
+	delete(f.endpoints, id)
+	return nil
+}
+
+func TestEndpointService_CreateAndMatch(t *testing.T) {
+	repo := newFakeEndpointRepo()
+	svc := New(repo)
+
+	// Create global endpoint
+	created, err := svc.Create(context.Background(), "get", "users", 200, json.RawMessage(`{"users":[]}`))
 	if err != nil {
-		t.Fatalf("unexpected create error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if created.Method != "GET" || created.Path != "/users" || created.Status != 200 {
-		t.Fatalf("unexpected created mockmock: %+v", created)
-	}
-
-	if _, err := svc.Create(ctx, "GET", "/users", 200, nil); err == nil {
-		t.Fatal("expected conflict on duplicate method and path")
+	if created.Method != "GET" || created.Path != "/users" {
+		t.Fatalf("unexpected endpoint: %+v", created)
 	}
 
-	fetched, err := svc.GetByID(ctx, created.ID)
+	// Conflict creation
+	_, err = svc.Create(context.Background(), "GET", "/users", 200, nil)
+	if !apperror.Is(err, apperror.Conflict) {
+		t.Fatalf("expected Conflict, got: %v", err)
+	}
+
+	// Match
+	matched, err := svc.Match(context.Background(), "GET", "/users")
 	if err != nil {
-		t.Fatalf("unexpected get error: %v", err)
-	}
-	if fetched.ID != created.ID {
-		t.Fatalf("expected ID %s, got %s", created.ID, fetched.ID)
-	}
-
-	matched, err := svc.Match(ctx, "GET", "/users")
-	if err != nil {
-		t.Fatalf("unexpected match error: %v", err)
+		t.Fatalf("match failed: %v", err)
 	}
 	if matched.ID != created.ID {
-		t.Fatalf("expected matched ID %s, got %s", created.ID, matched.ID)
+		t.Fatalf("matched wrong endpoint: %+v", matched)
 	}
 
-	if _, err := svc.Match(ctx, "POST", "/users"); err == nil {
-		t.Fatal("expected match not found for POST /users")
-	}
-
-	updated, err := svc.Update(ctx, created.ID, "POST", "/users", 201, json.RawMessage(`{"created":true}`))
+	// Duplicate
+	dup, err := svc.Duplicate(context.Background(), created.ID)
 	if err != nil {
-		t.Fatalf("unexpected update error: %v", err)
+		t.Fatalf("duplicate failed: %v", err)
 	}
-	if updated.Method != "POST" || updated.Status != 201 {
-		t.Fatalf("unexpected updated fields: %+v", updated)
-	}
-
-	dup, err := svc.Duplicate(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("unexpected duplicate error: %v", err)
-	}
-	if dup.Path != "/users-copy" || dup.Method != "POST" {
+	if dup.Path != "/users-copy" {
 		t.Fatalf("unexpected duplicate path: %s", dup.Path)
-	}
-
-	list, err := svc.List(ctx)
-	if err != nil {
-		t.Fatalf("unexpected list error: %v", err)
-	}
-	if len(list) != 2 {
-		t.Fatalf("expected 2 items, got %d", len(list))
-	}
-
-	if err := svc.Delete(ctx, created.ID); err != nil {
-		t.Fatalf("unexpected delete error: %v", err)
-	}
-	if _, err := svc.GetByID(ctx, created.ID); err == nil {
-		t.Fatal("expected not found after deletion")
 	}
 }

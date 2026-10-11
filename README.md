@@ -55,14 +55,3 @@ make lint          # Run golangci-lint
 ### Health Checks
 - `GET /healthz` - Liveness check (`{"status":"ok"}`)
 - `GET /readyz` - Readiness check with database ping & pool stats
-
-## Local UI
-
-Open `http://localhost:8080/` after `make up`. The UI is plain HTML/CSS/JavaScript embedded in the Go binary (no npm or frontend build step needed).
-
-- **Project Management**: Create and select Projects from the sidebar.
-- **Mock Endpoints**: For each project, easily create mock endpoints by selecting HTTP Method (GET, POST, PUT, DELETE, PATCH...), setting Path (e.g. `/users`, `/auth/login`), Status Code, and pasting any custom JSON response.
-- **1-Click Copy URL**: Instantly copy full mock URL `http://localhost:8080/mock/:projectSlug/:path` ready to be called from your app or curl.
-- **Inline Actions**: Edit, duplicate, and delete mock endpoints with live preview.
-
-UI files: `internal/web/static/`; route/embedding: `internal/web/web.go`; wired in `internal/app/app.go`.

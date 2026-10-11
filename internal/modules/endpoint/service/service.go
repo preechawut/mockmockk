@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -11,15 +10,69 @@ import (
 	"github.com/google/uuid"
 
 	"mockapi/internal/modules/endpoint/domain"
-	"mockapi/internal/platform/apperror"
+	"mockapi/internal/shared/apperror"
 )
+
+const maxDuplicateAttempts = 100
+
+type Repository interface {
+	Create(ctx context.Context, m domain.Endpoint) (domain.Endpoint, error)
+	List(ctx context.Context) ([]domain.Endpoint, error)
+	ListByProject(ctx context.Context, projectID string) ([]domain.Endpoint, error)
+	GetByID(ctx context.Context, id string) (domain.Endpoint, error)
+	FindMatch(ctx context.Context, method, path string) (domain.Endpoint, error)
+	FindMatchByProject(ctx context.Context, projectID, method, path string) (domain.Endpoint, error)
+	Update(ctx context.Context, m domain.Endpoint) (domain.Endpoint, error)
+	Delete(ctx context.Context, id string) error
+}
 
 type Service struct {
 	repo Repository
 }
 
-func NewService(repo Repository) *Service {
+func New(repo Repository) *Service {
 	return &Service{repo: repo}
+}
+
+func (s *Service) GetByID(ctx context.Context, id string) (domain.Endpoint, error) {
+	if strings.TrimSpace(id) == "" {
+		return domain.Endpoint{}, apperror.New(apperror.Invalid, "invalid id")
+	}
+	return s.repo.GetByID(ctx, id)
+}
+
+func (s *Service) List(ctx context.Context) ([]domain.Endpoint, error) {
+	return s.repo.List(ctx)
+}
+
+func (s *Service) ListByProject(ctx context.Context, projectID string) ([]domain.Endpoint, error) {
+	return s.repo.ListByProject(ctx, projectID)
+}
+
+func (s *Service) Match(ctx context.Context, method, path string) (domain.Endpoint, error) {
+	cleanMethod := strings.ToUpper(strings.TrimSpace(method))
+	cleanPath := domain.NormalizePath(path)
+	m, err := s.repo.FindMatch(ctx, cleanMethod, cleanPath)
+	if err != nil {
+		if apperror.Is(err, apperror.NotFound) {
+			return domain.Endpoint{}, apperror.New(apperror.NotFound, "no mock endpoint configured")
+		}
+		return domain.Endpoint{}, err
+	}
+	return m, nil
+}
+
+func (s *Service) MatchProject(ctx context.Context, projectID, method, path string) (domain.Endpoint, error) {
+	cleanMethod := strings.ToUpper(strings.TrimSpace(method))
+	cleanPath := domain.NormalizePath(path)
+	m, err := s.repo.FindMatchByProject(ctx, projectID, cleanMethod, cleanPath)
+	if err != nil {
+		if apperror.Is(err, apperror.NotFound) {
+			return domain.Endpoint{}, apperror.New(apperror.NotFound, "no mock endpoint configured")
+		}
+		return domain.Endpoint{}, err
+	}
+	return m, nil
 }
 
 func (s *Service) CreateWithProject(ctx context.Context, projectID *string, method, path string, status int, response json.RawMessage) (domain.Endpoint, error) {
@@ -46,11 +99,11 @@ func (s *Service) CreateWithProject(ctx context.Context, projectID *string, meth
 	} else {
 		existing, err = s.repo.FindMatch(ctx, cleanMethod, cleanPath)
 	}
-	if err != nil && !errors.Is(err, domain.ErrNoMatch) {
+	if err != nil && !apperror.Is(err, apperror.NotFound) {
 		return domain.Endpoint{}, err
 	}
 	if err == nil && existing.ID != "" {
-		return domain.Endpoint{}, apperror.Conflict("CONFLICT",
+		return domain.Endpoint{}, apperror.New(apperror.Conflict,
 			fmt.Sprintf("endpoint for %s %s already exists", cleanMethod, cleanPath))
 	}
 
@@ -77,24 +130,9 @@ func (s *Service) Create(ctx context.Context, method, path string, status int, r
 	return s.CreateWithProject(ctx, nil, method, path, status, response)
 }
 
-func (s *Service) List(ctx context.Context) ([]domain.Endpoint, error) {
-	return s.repo.List(ctx)
-}
-
-func (s *Service) ListByProject(ctx context.Context, projectID string) ([]domain.Endpoint, error) {
-	return s.repo.ListByProject(ctx, projectID)
-}
-
-func (s *Service) GetByID(ctx context.Context, id string) (domain.Endpoint, error) {
-	if strings.TrimSpace(id) == "" {
-		return domain.Endpoint{}, domain.ErrInvalidInput
-	}
-	return s.repo.GetByID(ctx, id)
-}
-
 func (s *Service) Update(ctx context.Context, id, method, path string, status int, response json.RawMessage) (domain.Endpoint, error) {
 	if strings.TrimSpace(id) == "" {
-		return domain.Endpoint{}, domain.ErrInvalidInput
+		return domain.Endpoint{}, apperror.New(apperror.Invalid, "invalid id")
 	}
 
 	existing, err := s.repo.GetByID(ctx, id)
@@ -138,12 +176,17 @@ func (s *Service) Update(ctx context.Context, id, method, path string, status in
 		cleanResponse = resp
 	}
 
-	other, err := s.repo.FindMatch(ctx, cleanMethod, cleanPath)
-	if err != nil && !errors.Is(err, domain.ErrNoMatch) {
+	var other domain.Endpoint
+	if existing.ProjectID != nil {
+		other, err = s.repo.FindMatchByProject(ctx, *existing.ProjectID, cleanMethod, cleanPath)
+	} else {
+		other, err = s.repo.FindMatch(ctx, cleanMethod, cleanPath)
+	}
+	if err != nil && !apperror.Is(err, apperror.NotFound) {
 		return domain.Endpoint{}, err
 	}
 	if err == nil && other.ID != "" && other.ID != id {
-		return domain.Endpoint{}, apperror.Conflict("CONFLICT",
+		return domain.Endpoint{}, apperror.New(apperror.Conflict,
 			fmt.Sprintf("endpoint for %s %s already exists", cleanMethod, cleanPath))
 	}
 
@@ -155,11 +198,9 @@ func (s *Service) Update(ctx context.Context, id, method, path string, status in
 	return s.repo.Update(ctx, existing)
 }
 
-const maxDuplicateAttempts = 100
-
 func (s *Service) Duplicate(ctx context.Context, id string) (domain.Endpoint, error) {
 	if strings.TrimSpace(id) == "" {
-		return domain.Endpoint{}, domain.ErrInvalidInput
+		return domain.Endpoint{}, apperror.New(apperror.Invalid, "invalid id")
 	}
 	src, err := s.repo.GetByID(ctx, id)
 	if err != nil {
@@ -175,11 +216,16 @@ func (s *Service) Duplicate(ctx context.Context, id string) (domain.Endpoint, er
 			path = fmt.Sprintf("%s-%d", base, i)
 		}
 		dup := domain.Endpoint{
-			ID: uuid.NewString(), Method: src.Method, Path: path,
-			Status: src.Status, Response: src.Response, CreatedAt: time.Now().UTC(),
+			ID:        uuid.NewString(),
+			ProjectID: src.ProjectID,
+			Method:    src.Method,
+			Path:      path,
+			Status:    src.Status,
+			Response:  src.Response,
+			CreatedAt: time.Now().UTC(),
 		}
 		created, err := s.repo.Create(ctx, dup)
-		if errors.Is(err, domain.ErrConflict) {
+		if apperror.Is(err, apperror.Conflict) {
 			continue
 		}
 		if err != nil {
@@ -187,32 +233,12 @@ func (s *Service) Duplicate(ctx context.Context, id string) (domain.Endpoint, er
 		}
 		return created, nil
 	}
-	return domain.Endpoint{}, apperror.Conflict("CONFLICT", "could not generate unique duplicate path")
+	return domain.Endpoint{}, apperror.New(apperror.Conflict, "could not generate unique duplicate path")
 }
 
 func (s *Service) Delete(ctx context.Context, id string) error {
 	if strings.TrimSpace(id) == "" {
-		return domain.ErrInvalidInput
+		return apperror.New(apperror.Invalid, "invalid id")
 	}
 	return s.repo.Delete(ctx, id)
-}
-
-func (s *Service) Match(ctx context.Context, method, path string) (domain.Endpoint, error) {
-	cleanMethod := strings.ToUpper(strings.TrimSpace(method))
-	cleanPath := domain.NormalizePath(path)
-	m, err := s.repo.FindMatch(ctx, cleanMethod, cleanPath)
-	if errors.Is(err, domain.ErrNoMatch) {
-		return domain.Endpoint{}, domain.ErrNoMatch
-	}
-	return m, err
-}
-
-func (s *Service) MatchProject(ctx context.Context, projectID, method, path string) (domain.Endpoint, error) {
-	cleanMethod := strings.ToUpper(strings.TrimSpace(method))
-	cleanPath := domain.NormalizePath(path)
-	m, err := s.repo.FindMatchByProject(ctx, projectID, cleanMethod, cleanPath)
-	if errors.Is(err, domain.ErrNoMatch) {
-		return domain.Endpoint{}, domain.ErrNoMatch
-	}
-	return m, err
 }

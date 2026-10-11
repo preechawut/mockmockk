@@ -2,6 +2,7 @@ FROM golang:1.25-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
+COPY migrations ./migrations
 COPY internal ./internal
 COPY cmd ./cmd
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /api ./cmd/api

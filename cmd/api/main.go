@@ -1,29 +1,65 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"mockapi/internal/app"
 	"mockapi/internal/config"
 	"mockapi/internal/platform/logger"
+	"mockapi/internal/platform/postgres"
+	"mockapi/migrations"
 )
 
 func main() {
-	bootstrap := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	if err := run(); err != nil {
+		slog.Error("api stopped", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	// config
 	cfg, err := config.Load()
 	if err != nil {
-		bootstrap.Error("invalid configuration", "error", err)
-		os.Exit(1)
+		return err
 	}
-	appLogger, err := logger.New(os.Stdout, cfg.LogLevel, cfg.LogFormat)
+
+	// logging
+	log, err := logger.New(os.Stdout, cfg.LogFormat, cfg.LogLevel)
 	if err != nil {
-		bootstrap.Error("invalid logging configuration", "error", err)
-		os.Exit(1)
+		return err
 	}
-	appLogger = appLogger.With("service", cfg.ServiceName, "environment", cfg.Environment)
-	if err := app.Run(cfg, appLogger); err != nil {
-		appLogger.Error("server stopped", "error", err)
-		os.Exit(1)
+	slog.SetDefault(log)
+
+	// signals
+	ctx, stop := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+	defer stop()
+
+	// connect db
+	startup, cancel := context.WithTimeout(ctx, 30*time.Second)
+	db, err := postgres.Open(startup, cfg.DatabaseURL)
+	if err != nil {
+		cancel()
+		return err
 	}
+	defer db.Close()
+
+	// migration
+	err = migrations.Apply(startup, db)
+	cancel()
+	if err != nil {
+		return err
+	}
+
+	// run app
+	return app.Run(ctx, cfg, db)
 }

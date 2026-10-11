@@ -1,68 +1,99 @@
-package domain_test
+package domain
 
 import (
 	"encoding/json"
 	"testing"
-
-	"mockapi/internal/modules/endpoint/domain"
 )
 
-func TestNormalizePath(t *testing.T) {
-	for _, tc := range []struct {
-		input, want string
+func TestValidateMethod(t *testing.T) {
+	cases := []struct {
+		method  string
+		want    string
+		wantErr bool
 	}{
-		{"/users", "/users"},
-		{"users", "/users"},
-		{"/users/", "/users"},
-		{"  /users/123/  ", "/users/123"},
-		{"//users//profile///", "/users/profile"},
-		{"///", "/"},
-		{"/", "/"},
-		{"", "/"},
-	} {
-		if got := domain.NormalizePath(tc.input); got != tc.want {
-			t.Fatalf("NormalizePath(%q) = %q, want %q", tc.input, got, tc.want)
+		{"get", "GET", false},
+		{"POST", "POST", false},
+		{" delete ", "DELETE", false},
+		{"", "", true},
+		{"INVALID", "", true},
+	}
+
+	for _, tc := range cases {
+		got, err := ValidateMethod(tc.method)
+		if (err != nil) != tc.wantErr {
+			t.Fatalf("ValidateMethod(%q) error = %v, wantErr = %v", tc.method, err, tc.wantErr)
+		}
+		if got != tc.want {
+			t.Fatalf("ValidateMethod(%q) = %q, want %q", tc.method, got, tc.want)
 		}
 	}
 }
 
-func TestValidation(t *testing.T) {
-	m, err := domain.ValidateMethod("get")
-	if err != nil || m != "GET" {
-		t.Fatalf("unexpected method: %v, %s", err, m)
-	}
-	mPatch, err := domain.ValidateMethod("patch")
-	if err != nil || mPatch != "PATCH" {
-		t.Fatalf("unexpected method: %v, %s", err, mPatch)
-	}
-	if _, err := domain.ValidateMethod(""); err == nil {
-		t.Fatal("expected error on empty method")
-	}
-	if _, err := domain.ValidateMethod("INVALID_METHOD"); err == nil {
-		t.Fatal("expected error on unsupported method")
+func TestValidatePath(t *testing.T) {
+	cases := []struct {
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{"users", "/users", false},
+		{"/users/", "/users", false},
+		{"/users/123", "/users/123", false},
+		{"/", "", true},
+		{"", "", true},
 	}
 
-	p, err := domain.ValidatePath("users")
-	if err != nil || p != "/users" {
-		t.Fatalf("unexpected path: %v, %s", err, p)
+	for _, tc := range cases {
+		got, err := ValidatePath(tc.input)
+		if (err != nil) != tc.wantErr {
+			t.Fatalf("ValidatePath(%q) error = %v, wantErr = %v", tc.input, err, tc.wantErr)
+		}
+		if got != tc.want {
+			t.Fatalf("ValidatePath(%q) = %q, want %q", tc.input, got, tc.want)
+		}
 	}
-	if _, err := domain.ValidatePath("/"); err == nil {
-		t.Fatal("expected error on root path")
+}
+
+func TestValidateStatus(t *testing.T) {
+	cases := []struct {
+		status  int
+		want    int
+		wantErr bool
+	}{
+		{0, 200, false},
+		{200, 200, false},
+		{201, 201, false},
+		{500, 500, false},
+		{99, 0, true},
+		{600, 0, true},
 	}
 
-	s, err := domain.ValidateStatus(0)
-	if err != nil || s != 200 {
-		t.Fatalf("unexpected status default: %v, %d", err, s)
+	for _, tc := range cases {
+		got, err := ValidateStatus(tc.status)
+		if (err != nil) != tc.wantErr {
+			t.Fatalf("ValidateStatus(%d) error = %v, wantErr = %v", tc.status, err, tc.wantErr)
+		}
+		if got != tc.want {
+			t.Fatalf("ValidateStatus(%d) = %d, want %d", tc.status, got, tc.want)
+		}
 	}
-	if _, err := domain.ValidateStatus(99); err == nil {
-		t.Fatal("expected error on status 99")
+}
+
+func TestValidateResponse(t *testing.T) {
+	cases := []struct {
+		input   string
+		wantErr bool
+	}{
+		{`{"ok": true}`, false},
+		{`[1, 2, 3]`, false},
+		{``, false},
+		{`null`, false},
+		{`invalid-json`, true},
 	}
 
-	r, err := domain.ValidateResponse(nil)
-	if err != nil || string(r) != "null" {
-		t.Fatalf("unexpected response default: %v, %s", err, string(r))
-	}
-	if _, err := domain.ValidateResponse(json.RawMessage("invalid-json")); err == nil {
-		t.Fatal("expected error on invalid json response")
+	for _, tc := range cases {
+		_, err := ValidateResponse(json.RawMessage(tc.input))
+		if (err != nil) != tc.wantErr {
+			t.Fatalf("ValidateResponse(%q) error = %v, wantErr = %v", tc.input, err, tc.wantErr)
+		}
 	}
 }

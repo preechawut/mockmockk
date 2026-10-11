@@ -5,3 +5,5 @@ bin
 *.md
 .env
 deployments
+
+frontend

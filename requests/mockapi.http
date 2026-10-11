@@ -1,0 +1,154 @@
+# Change baseUrl to match API_PORT / HTTP_ADDR.
+@baseUrl = http://localhost:8080
+# Generate a unique slug per Create; subsequent requests use its response.
+@projectId = {{createProject.response.body.$.data.id}}
+@projectSlug = {{createProject.response.body.$.data.slug}}
+@endpointId = {{createEndpoint.response.body.$.data.id}}
+@projectDuplicateId = {{duplicateProject.response.body.$.data.id}}
+@globalId = {{createGlobal.response.body.$.data.id}}
+@duplicateId = {{duplicateGlobal.response.body.$.data.id}}
+
+### Health — 200
+GET {{baseUrl}}/healthz
+
+### Database readiness — 200 when DB is available, otherwise 503
+GET {{baseUrl}}/readyz
+
+### Create Project — 201 (send this before the project requests)
+# @name createProject
+POST {{baseUrl}}/api/v1/projects
+Content-Type: application/json
+
+{
+  "name": "REST Client Demo",
+  "slug": "rest-demo-{{$guid}}"
+}
+
+### List Projects — 200
+GET {{baseUrl}}/api/v1/projects
+
+### Get Project — 200
+GET {{baseUrl}}/api/v1/projects/{{projectId}}
+
+### Rename Project — 200
+PATCH {{baseUrl}}/api/v1/projects/{{projectId}}
+Content-Type: application/json
+
+{
+  "name": "REST Client Demo Updated"
+}
+
+### Create project Endpoint — 201
+# @name createEndpoint
+POST {{baseUrl}}/api/v1/projects/{{projectId}}/endpoints
+Content-Type: application/json
+
+{
+  "method": "GET",
+  "path": "/users",
+  "status": 200,
+  "response": [{"id": 1, "name": "Alice"}]
+}
+
+### List project Endpoints — 200
+GET {{baseUrl}}/api/v1/projects/{{projectId}}/endpoints
+
+### Get project Endpoint — 200
+GET {{baseUrl}}/api/v1/projects/{{projectId}}/endpoints/{{endpointId}}
+
+### Call project mock — 200, configured JSON array
+GET {{baseUrl}}/mock/{{projectSlug}}/users
+
+### Update project Endpoint — 200
+PUT {{baseUrl}}/api/v1/projects/{{projectId}}/endpoints/{{endpointId}}
+Content-Type: application/json
+
+{
+  "method": "GET",
+  "path": "/users",
+  "status": 202,
+  "response": {"message": "updated", "users": [{"id": 2, "name": "Bob"}]}
+}
+
+### Call updated mock — 202, configured JSON object
+GET {{baseUrl}}/mock/{{projectSlug}}/users
+
+### Duplicate project Endpoint — 201, stays in this Project
+# @name duplicateProject
+POST {{baseUrl}}/api/v1/projects/{{projectId}}/endpoints/{{endpointId}}/duplicate
+
+### Call project duplicate — 202
+GET {{baseUrl}}/mock/{{projectSlug}}{{duplicateProject.response.body.$.data.path}}
+
+### Cross-project access — 404, even though Endpoint exists
+GET {{baseUrl}}/api/v1/projects/00000000-0000-0000-0000-000000000000/endpoints/{{endpointId}}
+
+### Create global Endpoint — 201
+# @name createGlobal
+POST {{baseUrl}}/api/v1/mockmocks
+Content-Type: application/json
+
+{
+  "method": "POST",
+  "path": "/rest-client/{{projectSlug}}/verify",
+  "status": 201,
+  "response": {"verified": true}
+}
+
+### List global/legacy Endpoints — 200
+GET {{baseUrl}}/api/v1/mockmocks
+
+### Get global Endpoint — 200
+GET {{baseUrl}}/api/v1/mockmocks/{{globalId}}
+
+### Call global mock — 201 (request body does not change configured response)
+POST {{baseUrl}}/mock/rest-client/{{projectSlug}}/verify
+Content-Type: application/json
+
+{"citizenId": "1234567890123"}
+
+### Patch global Endpoint — 200
+PATCH {{baseUrl}}/api/v1/mockmocks/{{globalId}}
+Content-Type: application/json
+
+{"status": 400, "response": {"verified": false}}
+
+### Call patched global mock — 400, configured JSON
+POST {{baseUrl}}/mock/rest-client/{{projectSlug}}/verify
+Content-Type: application/json
+
+{}
+
+### Duplicate global Endpoint — 201
+# @name duplicateGlobal
+POST {{baseUrl}}/api/v1/mockmocks/{{globalId}}/duplicate
+
+### Call duplicated global mock — 400
+POST {{baseUrl}}/mock{{duplicateGlobal.response.body.$.data.path}}
+
+### Validation: missing method — 400
+POST {{baseUrl}}/api/v1/mockmocks
+Content-Type: application/json
+
+{"path": "/invalid"}
+
+### Validation: invalid Project UUID — 400
+GET {{baseUrl}}/api/v1/projects/not-a-uuid
+
+### Missing Endpoint — 404
+GET {{baseUrl}}/api/v1/mockmocks/00000000-0000-0000-0000-000000000000
+
+### Cleanup: delete duplicate — 200
+DELETE {{baseUrl}}/api/v1/mockmocks/{{duplicateId}}
+
+### Cleanup: delete global Endpoint — 200
+DELETE {{baseUrl}}/api/v1/mockmocks/{{globalId}}
+
+### Cleanup: delete project duplicate — 200
+DELETE {{baseUrl}}/api/v1/projects/{{projectId}}/endpoints/{{projectDuplicateId}}
+
+### Cleanup: delete project Endpoint — 200
+DELETE {{baseUrl}}/api/v1/projects/{{projectId}}/endpoints/{{endpointId}}
+
+### Cleanup: delete Project — 204
+DELETE {{baseUrl}}/api/v1/projects/{{projectId}}
